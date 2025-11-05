@@ -1,41 +1,43 @@
 """
 Journal Recommendation Service - AI-powered journal matching
+NOW USING: Cohere Embeddings API
 """
 from typing import List, Dict, Optional
 from collections import defaultdict
 import logging
+import cohere
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
 
-from sentence_transformers import SentenceTransformer, util
-import torch
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
 class JournalRecommendationService:
-    """Service for recommending suitable journals for papers"""
+    """Service for recommending suitable journals for papers using Cohere API"""
 
     def __init__(self):
-        # Initialize models (lazy loading)
-        self._embedding_model = None
+        # Initialize Cohere API
+        self._init_cohere()
 
         # In production, this would load from database
         # For now, we'll use a sample journal database
         self.journal_database = self._load_sample_journals()
 
-    @property
-    def embedding_model(self):
-        """Lazy load embedding model"""
-        if self._embedding_model is None:
-            logger.info("Loading embedding model for journal matching...")
-            try:
-                # Use SPECTER for scientific papers
-                self._embedding_model = SentenceTransformer('allenai/specter')
-                logger.info("Embedding model loaded")
-            except Exception as e:
-                logger.error(f"Error loading embedding model: {e}")
-                # Fallback to general model
-                self._embedding_model = SentenceTransformer('all-mpnet-base-v2')
-        return self._embedding_model
+        # Pre-compute journal embeddings for efficiency
+        self.journal_embeddings = None
+        self.journal_embedding_ids = None
+
+    def _init_cohere(self):
+        """Initialize Cohere API client"""
+        if settings.COHERE_API_KEY:
+            self.cohere_client = cohere.Client(settings.COHERE_API_KEY)
+            self.cohere_model = settings.COHERE_MODEL
+            logger.info(f"✅ Cohere initialized: {self.cohere_model}")
+        else:
+            self.cohere_client = None
+            logger.warning("⚠️ Cohere API key not found - using fallback keyword matching only")
 
     async def recommend_journals(
         self,
@@ -63,8 +65,13 @@ class JournalRecommendationService:
         if preferences is None:
             preferences = {}
 
-        # Step 1: Semantic matching
-        semantic_scores = self._calculate_semantic_similarity(paper_abstract)
+        # Step 1: Semantic matching using Cohere
+        if self.cohere_client:
+            semantic_scores = await self._calculate_semantic_similarity_cohere(paper_abstract)
+        else:
+            # Fallback: use keyword matching only
+            logger.warning("Using fallback keyword matching (Cohere not available)")
+            semantic_scores = {j['id']: 0.5 for j in self.journal_database}
 
         # Step 2: Keyword matching
         keyword_scores = self._calculate_keyword_overlap(
@@ -99,7 +106,7 @@ class JournalRecommendationService:
                 semantic_score, keyword_score, journal
             )
 
-            # Estimate acceptance probability (mock for now)
+            # Estimate acceptance probability
             acceptance_probability = self._estimate_acceptance_probability(
                 fit_score, journal
             )
@@ -118,43 +125,67 @@ class JournalRecommendationService:
         # Sort by composite score
         scored_journals.sort(key=lambda x: x['composite_score'], reverse=True)
 
-        logger.info(f"Recommended {len(scored_journals)} journals")
+        logger.info(f"✅ Recommended {len(scored_journals)} journals")
         return scored_journals[:20]  # Top 20
 
-    def _calculate_semantic_similarity(
+    async def _calculate_semantic_similarity_cohere(
         self,
         paper_abstract: str
     ) -> Dict[str, float]:
-        """Calculate semantic similarity between paper and journals"""
-        logger.info("Calculating semantic similarities...")
+        """Calculate semantic similarity using Cohere Embeddings API"""
+        logger.info("Calculating semantic similarities with Cohere...")
 
-        # Encode paper abstract
-        paper_embedding = self.embedding_model.encode(
-            paper_abstract,
-            convert_to_tensor=True
-        )
-
-        scores = {}
-
-        for journal in self.journal_database:
-            # Create journal profile text
-            journal_profile = f"{journal['title']} {journal.get('description', '')} {' '.join(journal.get('keywords', []))}"
-
-            # Encode journal profile
-            journal_embedding = self.embedding_model.encode(
-                journal_profile,
-                convert_to_tensor=True
+        try:
+            # Encode paper abstract
+            logger.info("Embedding paper abstract...")
+            paper_response = self.cohere_client.embed(
+                texts=[paper_abstract[:2000]],  # Limit length
+                model=self.cohere_model,
+                input_type='search_query'
             )
+            paper_embedding = np.array(paper_response.embeddings[0])
 
-            # Calculate cosine similarity
-            similarity = util.pytorch_cos_sim(
-                paper_embedding,
-                journal_embedding
-            ).item()
+            # Encode all journal profiles (batch processing!)
+            if self.journal_embeddings is None:
+                logger.info(f"Embedding {len(self.journal_database)} journal profiles...")
+                journal_profiles = []
+                journal_ids = []
 
-            scores[journal['id']] = similarity
+                for journal in self.journal_database:
+                    # Create journal profile text
+                    profile = f"{journal['title']} {journal.get('description', '')} {' '.join(journal.get('keywords', []))}"
+                    journal_profiles.append(profile[:2000])
+                    journal_ids.append(journal['id'])
 
-        return scores
+                # Batch embed all journals
+                journals_response = self.cohere_client.embed(
+                    texts=journal_profiles,
+                    model=self.cohere_model,
+                    input_type='search_document'
+                )
+                self.journal_embeddings = np.array(journals_response.embeddings)
+                self.journal_embedding_ids = journal_ids
+                logger.info(f"✅ Cached embeddings for {len(journal_ids)} journals")
+
+            # Calculate cosine similarities
+            similarities = cosine_similarity(
+                paper_embedding.reshape(1, -1),
+                self.journal_embeddings
+            )[0]
+
+            # Create scores dictionary
+            scores = {
+                journal_id: float(similarity)
+                for journal_id, similarity in zip(self.journal_embedding_ids, similarities)
+            }
+
+            logger.info(f"✅ Calculated {len(scores)} similarity scores")
+            return scores
+
+        except Exception as e:
+            logger.error(f"❌ Error in Cohere semantic similarity: {e}")
+            # Fallback to equal scores
+            return {j['id']: 0.5 for j in self.journal_database}
 
     def _calculate_keyword_overlap(
         self,
@@ -254,7 +285,7 @@ class JournalRecommendationService:
         # Normalize metrics
         norm_semantic = semantic_score  # Already 0-1
         norm_keyword = keyword_score  # Already 0-1
-        norm_impact = min(impact_factor / 10.0, 1.0)  # Normalize by 10
+        norm_impact = min(impact_factor / 10.0, 1.0) if impact_factor else 0.0  # Normalize by 10
         norm_time = 1.0 - min(time_to_publish / 365.0, 1.0)  # Lower is better
         norm_oa = 1.0 if open_access else 0.5
         norm_acceptance = acceptance_rate / 100.0  # 0-1
@@ -291,7 +322,7 @@ class JournalRecommendationService:
         fit = (semantic_score * 0.6 + keyword_score * 0.4)
 
         # Boost for highly cited journals (proxy for quality match)
-        if journal.get('h_index', 0) > 50:
+        if journal.get('h_index', 0) and journal.get('h_index', 0) > 50:
             fit *= 1.1
 
         return min(fit, 1.0)

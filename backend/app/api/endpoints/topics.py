@@ -15,9 +15,9 @@ from app.models.user import User
 router = APIRouter()
 
 
-@router.get("/trending", response_model=List[TopicResponse])
+@router.get("/trending")
 async def get_trending_topics(
-    discipline: str,
+    discipline: str = "Computer Science",
     limit: int = 20,
     time_window: str = "recent",
     background_tasks: BackgroundTasks = None

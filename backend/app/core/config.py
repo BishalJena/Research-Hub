@@ -1,3 +1,4 @@
+from pydantic import ConfigDict
 from pydantic_settings import BaseSettings
 from typing import List, Optional
 from functools import lru_cache
@@ -43,8 +44,31 @@ class Settings(BaseSettings):
     PINECONE_ENVIRONMENT: str = "us-west1-gcp"
     PINECONE_INDEX_NAME: str = "research-hub"
 
-    # AI Models
+    # AI Models - OpenRouter/OpenAI API
     OPENAI_API_KEY: Optional[str] = None
+    OPENAI_API_BASE: str = "https://openrouter.ai/api/v1"
+    OPENAI_MODEL: str = "google/gemini-2.5-flash"
+    OPENAI_MAX_TOKENS: int = 1500
+    OPENAI_TEMPERATURE: float = 0.3
+    OPENROUTER_APP_NAME: str = "Smart Research Hub"
+    OPENROUTER_APP_URL: str = "https://research-hub.apcce.gov.in"
+
+    # Cohere API - Embeddings
+    COHERE_API_KEY: Optional[str] = None
+    COHERE_MODEL: str = "embed-english-v3.0"
+
+    # Bhashini API - Translation
+    BHASHINI_API_KEY: Optional[str] = None
+    BHASHINI_USER_ID: Optional[str] = None
+    BHASHINI_API_ENDPOINT: str = "https://api.bhashini.gov.in"
+
+    # API Configuration
+    USE_API_MODELS: bool = True
+    ENABLE_TRANSLATION: bool = True
+    API_BUDGET_ALERT_THRESHOLD: int = 40
+    API_BUDGET_HARD_LIMIT: int = 50
+    TRACK_API_USAGE: bool = True
+
     MODEL_CACHE_DIR: str = "/app/models"
 
     # File Storage
@@ -68,9 +92,11 @@ class Settings(BaseSettings):
     ENABLE_METRICS: bool = True
     METRICS_PORT: int = 9090
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = ConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore"  # Allow extra fields from .env without validation errors
+    )
 
 
 @lru_cache()

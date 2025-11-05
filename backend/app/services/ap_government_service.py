@@ -18,6 +18,7 @@ class APGovernmentService:
         self.government_priorities = self._load_government_priorities()
         self.funding_schemes = self._load_funding_schemes()
         self.district_data = self._load_district_data()
+        self.sdg_mapping = self._load_sdg_mapping()
 
     async def analyze_research_alignment(
         self,
@@ -72,7 +73,7 @@ class APGovernmentService:
 
         result = {
             'research_topic': research_topic,
-            'alignment_score': self._calculate_overall_alignment(matching_priorities),
+            'overall_alignment_score': self._calculate_overall_alignment(matching_priorities),
             'matching_priorities': matching_priorities[:5],  # Top 5
             'funding_opportunities': relevant_funding,
             'impact_areas': impact_areas,
@@ -509,3 +510,50 @@ class APGovernmentService:
                 'agriculture_dependent': 0.71
             }
         }
+
+    def _load_sdg_mapping(self) -> List[Dict]:
+        """Load UN Sustainable Development Goals mapping"""
+        return [
+            {
+                'number': 1,
+                'name': 'No Poverty',
+                'description': 'End poverty in all its forms everywhere',
+                'keywords': ['poverty', 'income', 'livelihood', 'employment']
+            },
+            {
+                'number': 2,
+                'name': 'Zero Hunger',
+                'description': 'End hunger, achieve food security and improved nutrition',
+                'keywords': ['food', 'agriculture', 'nutrition', 'farming', 'crop']
+            },
+            {
+                'number': 3,
+                'name': 'Good Health and Well-being',
+                'description': 'Ensure healthy lives and promote well-being for all',
+                'keywords': ['health', 'disease', 'medical', 'healthcare', 'medicine']
+            },
+            {
+                'number': 4,
+                'name': 'Quality Education',
+                'description': 'Ensure inclusive and equitable quality education',
+                'keywords': ['education', 'learning', 'school', 'student', 'teaching']
+            },
+            {
+                'number': 6,
+                'name': 'Clean Water and Sanitation',
+                'description': 'Ensure availability and sustainable management of water',
+                'keywords': ['water', 'sanitation', 'irrigation', 'groundwater', 'fluoride']
+            },
+            {
+                'number': 7,
+                'name': 'Affordable and Clean Energy',
+                'description': 'Ensure access to affordable, reliable, sustainable energy',
+                'keywords': ['energy', 'solar', 'renewable', 'electricity', 'power']
+            },
+            {
+                'number': 13,
+                'name': 'Climate Action',
+                'description': 'Take urgent action to combat climate change',
+                'keywords': ['climate', 'carbon', 'emission', 'environment', 'sustainability']
+            }
+        ]

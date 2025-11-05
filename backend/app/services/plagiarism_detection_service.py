@@ -1,44 +1,43 @@
 """
 Plagiarism Detection Service - Multi-layered similarity detection
+NOW USING: Cohere Embeddings API
 """
 from typing import List, Dict, Tuple, Optional
 import re
 import hashlib
 from collections import defaultdict
 import logging
-
-from sentence_transformers import SentenceTransformer, util
-import torch
+import cohere
 import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
 
+from app.core.config import settings
 from app.services.academic_api_client import SemanticScholarClient
 
 logger = logging.getLogger(__name__)
 
 
 class PlagiarismDetectionService:
-    """Service for detecting plagiarism using multiple techniques"""
+    """Service for detecting plagiarism using multiple techniques and Cohere API"""
 
     def __init__(self):
-        self.semantic_scholar = SemanticScholarClient()
+        # Initialize Semantic Scholar with API key from settings
+        self.semantic_scholar = SemanticScholarClient(
+            api_key=settings.SEMANTIC_SCHOLAR_API_KEY if settings.SEMANTIC_SCHOLAR_API_KEY else None
+        )
 
-        # Initialize models (lazy loading)
-        self._embedding_model = None
-        self._cross_encoder = None
+        # Initialize Cohere API
+        self._init_cohere()
 
-    @property
-    def embedding_model(self):
-        """Lazy load sentence embedding model"""
-        if self._embedding_model is None:
-            logger.info("Loading embedding model for plagiarism detection...")
-            try:
-                # Use all-mpnet for general text
-                self._embedding_model = SentenceTransformer('all-mpnet-base-v2')
-                logger.info("Embedding model loaded")
-            except Exception as e:
-                logger.error(f"Error loading embedding model: {e}")
-                raise
-        return self._embedding_model
+    def _init_cohere(self):
+        """Initialize Cohere API client"""
+        if settings.COHERE_API_KEY:
+            self.cohere_client = cohere.Client(settings.COHERE_API_KEY)
+            self.cohere_model = settings.COHERE_MODEL
+            logger.info(f"✅ Cohere initialized: {self.cohere_model}")
+        else:
+            self.cohere_client = None
+            logger.warning("⚠️ Cohere API key not found - semantic detection disabled")
 
     async def check_plagiarism(
         self,
@@ -73,9 +72,12 @@ class PlagiarismDetectionService:
         ngram_matches = self._ngram_detection(chunks)
         all_matches.extend(ngram_matches)
 
-        # Layer 3: Semantic similarity (paraphrase detection)
-        semantic_matches = await self._semantic_detection(chunks, check_online)
-        all_matches.extend(semantic_matches)
+        # Layer 3: Semantic similarity (paraphrase detection) - Using Cohere!
+        if self.cohere_client:
+            semantic_matches = await self._semantic_detection(chunks, check_online)
+            all_matches.extend(semantic_matches)
+        else:
+            logger.warning("⚠️ Skipping semantic detection - Cohere not available")
 
         # Remove duplicate matches
         unique_matches = self._deduplicate_matches(all_matches)
@@ -96,7 +98,7 @@ class PlagiarismDetectionService:
             'language': language
         }
 
-        logger.info(f"Plagiarism check complete. Score: {originality_score}")
+        logger.info(f"✅ Plagiarism check complete. Originality Score: {originality_score}%")
         return result
 
     def _chunk_text(self, text: str, min_chunk_size: int = 100) -> List[str]:
@@ -198,64 +200,99 @@ class PlagiarismDetectionService:
         check_online: bool = True,
         threshold: float = 0.75
     ) -> List[Dict]:
-        """Layer 3: Semantic similarity detection for paraphrases"""
-        logger.info("Running semantic detection...")
+        """
+        Layer 3: Semantic similarity detection using Cohere Embeddings
+
+        Detects paraphrased plagiarism by comparing semantic similarity
+        """
+        logger.info("Running semantic detection with Cohere...")
 
         matches = []
 
-        if not check_online:
+        if not check_online or not self.cohere_client:
             return matches
 
-        # Encode all chunks
-        chunk_embeddings = self.embedding_model.encode(
-            chunks,
-            convert_to_tensor=True,
-            show_progress_bar=False
-        )
+        try:
+            # Encode all chunks using Cohere (batch processing!)
+            logger.info(f"Embedding {len(chunks)} chunks with Cohere...")
 
-        # Search for similar papers online for each chunk
-        for i, chunk in enumerate(chunks[:5]):  # Limit to first 5 chunks for speed
-            try:
-                # Search Semantic Scholar
-                papers = await self.semantic_scholar.search_papers(
-                    query=chunk[:500],  # Limit query length
-                    limit=10
-                )
+            # Limit chunks for API efficiency (first 10 chunks)
+            chunks_to_check = chunks[:10]
 
-                for paper in papers:
-                    paper_text = f"{paper.get('title', '')} {paper.get('abstract', '')}"
-                    if not paper_text.strip():
-                        continue
+            chunk_response = self.cohere_client.embed(
+                texts=[chunk[:2000] for chunk in chunks_to_check],  # Limit length
+                model=self.cohere_model,
+                input_type='search_document'
+            )
+            chunk_embeddings = np.array(chunk_response.embeddings)
+            logger.info(f"✅ Generated {len(chunk_embeddings)} chunk embeddings")
 
-                    # Calculate semantic similarity
-                    paper_embedding = self.embedding_model.encode(
-                        paper_text,
-                        convert_to_tensor=True
+            # Search for similar papers online for each chunk
+            for i, chunk in enumerate(chunks_to_check):
+                try:
+                    # Search Semantic Scholar
+                    logger.info(f"Searching Semantic Scholar for chunk {i+1}/{len(chunks_to_check)}...")
+                    papers = await self.semantic_scholar.search_papers(
+                        query=chunk[:500],  # Limit query length
+                        limit=5  # Fewer papers for speed
                     )
 
-                    similarity = util.pytorch_cos_sim(
-                        chunk_embeddings[i],
-                        paper_embedding
-                    ).item()
+                    if not papers:
+                        logger.warning(f"No papers found on Semantic Scholar for chunk {i+1}")
+                        continue
 
-                    if similarity >= threshold:
-                        matches.append({
-                            'text': chunk[:200],
-                            'source': paper.get('title', 'Unknown'),
-                            'source_url': paper.get('url'),
-                            'similarity': similarity,
-                            'start_pos': i * 500,
-                            'end_pos': i * 500 + len(chunk),
-                            'type': 'paraphrase' if similarity < 0.9 else 'high_similarity',
-                            'source_year': paper.get('year'),
-                            'source_authors': [a.get('name') for a in paper.get('authors', [])][:3]
-                        })
+                    logger.info(f"Found {len(papers)} papers on Semantic Scholar for chunk {i+1}")
 
-            except Exception as e:
-                logger.error(f"Error in semantic detection for chunk {i}: {e}")
+                    # Get paper texts
+                    paper_texts = []
+                    valid_papers = []
+                    for paper in papers:
+                        paper_text = f"{paper.get('title', '')} {paper.get('abstract', '')}"
+                        if paper_text.strip():
+                            paper_texts.append(paper_text[:2000])
+                            valid_papers.append(paper)
 
-        logger.info(f"Found {len(matches)} semantic matches")
-        return matches
+                    if not paper_texts:
+                        continue
+
+                    # Embed papers using Cohere (batch!)
+                    papers_response = self.cohere_client.embed(
+                        texts=paper_texts,
+                        model=self.cohere_model,
+                        input_type='search_query'
+                    )
+                    papers_embeddings = np.array(papers_response.embeddings)
+
+                    # Calculate cosine similarity
+                    similarities = cosine_similarity(
+                        chunk_embeddings[i].reshape(1, -1),
+                        papers_embeddings
+                    )[0]
+
+                    # Find matches above threshold
+                    for paper, similarity in zip(valid_papers, similarities):
+                        if similarity >= threshold:
+                            matches.append({
+                                'text': chunk[:200],
+                                'source': paper.get('title', 'Unknown'),
+                                'source_url': paper.get('url'),
+                                'similarity': float(similarity),
+                                'start_pos': i * 500,
+                                'end_pos': i * 500 + len(chunk),
+                                'type': 'paraphrase' if similarity < 0.9 else 'high_similarity',
+                                'source_year': paper.get('year'),
+                                'source_authors': [a.get('name') for a in paper.get('authors', [])][:3]
+                            })
+
+                except Exception as e:
+                    logger.error(f"Error in semantic detection for chunk {i}: {e}")
+
+            logger.info(f"✅ Found {len(matches)} semantic matches")
+            return matches
+
+        except Exception as e:
+            logger.error(f"❌ Error in semantic detection: {e}")
+            return []
 
     def _deduplicate_matches(self, matches: List[Dict]) -> List[Dict]:
         """Remove duplicate matches"""
@@ -361,11 +398,11 @@ class PlagiarismDetectionService:
         # Identify claims that need citations
         claims = self._identify_claims(text)
 
-        for claim in claims:
+        for claim in claims[:5]:  # Limit to 5 claims
             # Search for relevant papers
             papers = await self.semantic_scholar.search_papers(
                 query=claim,
-                limit=5
+                limit=3  # Limit papers per claim
             )
 
             for paper in papers:
@@ -377,10 +414,10 @@ class PlagiarismDetectionService:
                     'venue': paper.get('venue'),
                     'url': paper.get('url'),
                     'citation_count': paper.get('citationCount'),
-                    'relevance': 0.8  # Could calculate actual relevance
+                    'relevance': 0.8  # Could calculate actual relevance with Cohere
                 })
 
-        logger.info(f"Generated {len(suggestions)} citation suggestions")
+        logger.info(f"✅ Generated {len(suggestions)} citation suggestions")
         return suggestions
 
     def _identify_claims(self, text: str) -> List[str]:

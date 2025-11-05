@@ -21,14 +21,35 @@ from app.core.config import settings
 router = APIRouter()
 
 
-@router.get("/", response_model=List[PaperResponse])
+@router.get("/")
 async def list_papers(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """List all papers for current user"""
     papers = db.query(Paper).filter(Paper.user_id == current_user.id).all()
-    return papers
+    
+    # Format for frontend
+    formatted_papers = []
+    for paper in papers:
+        formatted_papers.append({
+            "id": paper.id,
+            "title": paper.title,
+            "filename": paper.title + ".pdf",
+            "uploaded_at": paper.created_at.isoformat() if paper.created_at else None,
+            "created_at": paper.created_at.isoformat() if paper.created_at else None,
+            "processed": paper.status == PaperStatus.COMPLETED,
+            "status": paper.status.value if paper.status else "draft",
+            "summary": paper.summary,
+            "methodology": paper.key_insights.get("methodology") if paper.key_insights else None,
+            "key_findings": paper.key_insights.get("key_findings") if paper.key_insights else None,
+            "processing_progress": paper.processing_progress or 0,
+            "file_size": paper.file_size,
+            "abstract": paper.abstract,
+            "keywords": paper.keywords
+        })
+    
+    return {"papers": formatted_papers}
 
 
 @router.post("/upload", response_model=PaperUploadResponse, status_code=status.HTTP_201_CREATED)

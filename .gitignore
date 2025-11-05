@@ -1,3 +1,7 @@
+# Environment variables
+.env
+backend/.env
+
 # Python
 __pycache__/
 *.py[cod]
@@ -5,10 +9,6 @@ __pycache__/
 *.so
 .Python
 build/
-.claude
-.DS_Store
-.mcp.json
-.package-lock.json
 develop-eggs/
 dist/
 downloads/
@@ -25,62 +25,91 @@ wheels/
 *.egg
 MANIFEST
 
-# Virtual Environment
+# Virtual environments
 venv/
 env/
 ENV/
-.venv
+env.bak/
+venv.bak/
+backend/venv/
 
-# IDEs
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# Environment variables
-.env
-.env.local
-.env.*.local
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
 # Logs
 *.log
 logs/
+backend/logs/
 
 # Database
 *.db
 *.sqlite
+*.sqlite3
 
-# OS
-.DS_Store
-Thumbs.db
+# Uploads
+backend/uploads/
+uploads/
 
-# Node.js (for frontend)
+# Node.js
 node_modules/
-.next/
-out/
-.next/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+.pnpm-debug.log*
 
-# Uploads
-uploads/
-*.pdf
-*.docx
-*.doc
+# Next.js
+.next/
+out/
 
-# Models cache
-models/
-*.pt
-*.pth
-*.bin
-
-# Testing
-.coverage
+# Coverage reports
 htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
 .pytest_cache/
-.mypy_cache/
 
-# Docker
-docker-compose.override.yml
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json

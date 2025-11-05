@@ -41,7 +41,7 @@ class SemanticScholarClient:
         Args:
             query: Search query
             fields: Fields to return (title, abstract, authors, citations, etc.)
-            limit: Maximum number of results
+            limit: Maximum number of results (max 100 per request)
             year: Year filter (e.g., "2023-2024")
 
         Returns:
@@ -53,25 +53,44 @@ class SemanticScholarClient:
 
         session = await self._get_session()
 
+        # Use bulk search endpoint (recommended by Semantic Scholar)
+        # Limit to max 100 results per request
         params = {
             "query": query,
             "fields": ",".join(fields),
-            "limit": limit
+            "limit": min(limit, 100)  # API max is 100 per request
         }
 
         if year:
             params["year"] = year
 
         try:
-            async with session.get(f"{self.BASE_URL}/paper/search", params=params) as response:
+            # Use /bulk endpoint for better performance
+            endpoint = f"{self.BASE_URL}/paper/search/bulk"
+
+            logger.info(f"Searching Semantic Scholar: query='{query[:50]}...', limit={params['limit']}")
+            if self.api_key:
+                logger.info("Using Semantic Scholar API key (1 req/sec rate limit)")
+            else:
+                logger.warning("No Semantic Scholar API key - using shared rate limit (may be slow)")
+
+            async with session.get(endpoint, params=params) as response:
                 if response.status == 200:
                     data = await response.json()
-                    return data.get("data", [])
+                    papers = data.get("data", [])
+                    total = data.get("total", 0)
+                    logger.info(f"✅ Found {len(papers)} papers (total available: {total})")
+                    return papers
+                elif response.status == 429:
+                    logger.error("⚠️ Semantic Scholar rate limit exceeded (HTTP 429)")
+                    logger.error("Tip: Get a free API key at https://www.semanticscholar.org/product/api")
+                    return []
                 else:
-                    logger.error(f"Semantic Scholar API error: {response.status}")
+                    error_text = await response.text()
+                    logger.error(f"❌ Semantic Scholar API error {response.status}: {error_text[:200]}")
                     return []
         except Exception as e:
-            logger.error(f"Error calling Semantic Scholar API: {e}")
+            logger.error(f"❌ Error calling Semantic Scholar API: {e}")
             return []
 
     async def get_paper_details(self, paper_id: str) -> Optional[Dict]:

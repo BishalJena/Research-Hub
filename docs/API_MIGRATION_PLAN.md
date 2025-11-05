@@ -22,7 +22,7 @@ Migrating from heavyweight local AI models (7-8 GB) to cloud-based APIs to achie
 ## 🎯 Migration Strategy
 
 ### Phase 1: Core Services (High Priority)
-- Literature Review Service → **OpenAI API**
+- Literature Review Service → **OpenRouter API using gemini 2.5 flash**
 - Plagiarism Detection → **Cohere Embeddings API**
 - Journal Recommendation → **Cohere Embeddings API**
 - Translation Service → **Bhashini API** (Government of India - FREE!)
@@ -46,7 +46,7 @@ Migrating from heavyweight local AI models (7-8 GB) to cloud-based APIs to achie
 ### 1. Literature Review Service
 
 **Current**: BART-large-CNN (~1.6 GB)
-**New**: OpenAI GPT-3.5-Turbo
+**New**: gemini 2.5 flash (OpenRouter API)
 
 **Why**:
 - 10x faster (200ms vs 2-5s)
@@ -54,27 +54,6 @@ Migrating from heavyweight local AI models (7-8 GB) to cloud-based APIs to achie
 - No download/loading time
 - Handles longer texts (16k tokens vs 1024)
 
-**Implementation**:
-```python
-# Before
-from transformers import pipeline
-summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-
-# After
-import openai
-openai.api_key = os.getenv("OPENAI_API_KEY")
-response = openai.ChatCompletion.create(
-    model="gpt-3.5-turbo",
-    messages=[{
-        "role": "system",
-        "content": "Summarize this academic paper section concisely."
-    }, {
-        "role": "user",
-        "content": text
-    }],
-    max_tokens=200
-)
-```
 
 **Cost**: ~$0.002 per summary (500 summaries = $1)
 

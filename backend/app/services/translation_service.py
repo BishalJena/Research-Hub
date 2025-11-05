@@ -1,19 +1,21 @@
 """
-Translation Service - State-of-the-art multilingual support using IndicTrans2
+Translation Service - Multilingual support for Indian languages
+NOW USING: Bhashini API (Government of India) + Fallback
 """
 from typing import List, Dict, Optional
 import logging
 import hashlib
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-import torch
+import requests
+
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
 class TranslationService:
     """
-    State-of-the-art translation service using IndicTrans2
-    Built by AI4Bharat (IIT Madras + Microsoft) - Best for Indian languages
+    Translation service using Bhashini API (Government of India)
+    Best for Indian languages: Telugu, Hindi, Urdu, Sanskrit
     """
 
     # Supported languages
@@ -26,82 +28,32 @@ class TranslationService:
     }
 
     def __init__(self):
-        self.en_to_indic_model = None
-        self.en_to_indic_tokenizer = None
-        self.indic_to_en_model = None
-        self.indic_to_en_tokenizer = None
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Bhashini API configuration
+        self.bhashini_api_key = settings.BHASHINI_API_KEY
+        self.bhashini_user_id = settings.BHASHINI_USER_ID
+        self.bhashini_endpoint = settings.BHASHINI_API_ENDPOINT
 
         # In-memory cache for translations
         self.cache = {}
 
-        logger.info(f"TranslationService initialized on {self.device}")
-
-    def _load_en_to_indic_model(self):
-        """Lazy load English to Indic model"""
-        if self.en_to_indic_model is None:
-            logger.info("Loading IndicTrans2 EN→Indic model (this may take a minute)...")
-
-            model_name = "ai4bharat/indictrans2-en-indic-1B"
-
-            try:
-                self.en_to_indic_tokenizer = AutoTokenizer.from_pretrained(
-                    model_name,
-                    trust_remote_code=True
-                )
-                self.en_to_indic_model = AutoModelForSeq2SeqLM.from_pretrained(
-                    model_name,
-                    trust_remote_code=True
-                ).to(self.device)
-
-                logger.info("EN→Indic model loaded successfully")
-            except Exception as e:
-                logger.error(f"Failed to load EN→Indic model: {e}")
-                logger.warning("Falling back to mock translation for development")
-                # Will use fallback translation
-
-    def _load_indic_to_en_model(self):
-        """Lazy load Indic to English model"""
-        if self.indic_to_en_model is None:
-            logger.info("Loading IndicTrans2 Indic→EN model...")
-
-            model_name = "ai4bharat/indictrans2-indic-en-1B"
-
-            try:
-                self.indic_to_en_tokenizer = AutoTokenizer.from_pretrained(
-                    model_name,
-                    trust_remote_code=True
-                )
-                self.indic_to_en_model = AutoModelForSeq2SeqLM.from_pretrained(
-                    model_name,
-                    trust_remote_code=True
-                ).to(self.device)
-
-                logger.info("Indic→EN model loaded successfully")
-            except Exception as e:
-                logger.error(f"Failed to load Indic→EN model: {e}")
-                logger.warning("Falling back to mock translation for development")
-
-    def _get_cache_key(self, text: str, source_lang: str, target_lang: str) -> str:
-        """Generate cache key for translation"""
-        text_hash = hashlib.md5(text.encode()).hexdigest()
-        return f"{source_lang}_{target_lang}_{text_hash}"
+        if self.bhashini_api_key:
+            logger.info("✅ Bhashini API configured")
+        else:
+            logger.warning("⚠️ Bhashini API key not found - using mock translation for development")
 
     async def translate(
         self,
         text: str,
-        source_lang: str = "en",
-        target_lang: str = "te",
-        use_cache: bool = True
+        source_lang: str,
+        target_lang: str
     ) -> str:
         """
-        Translate text from source to target language
+        Translate text from source language to target language
 
         Args:
             text: Text to translate
             source_lang: Source language code (en, te, hi, ur, sa)
-            target_lang: Target language code
-            use_cache: Whether to use cached translations
+            target_lang: Target language code (en, te, hi, ur, sa)
 
         Returns:
             Translated text
@@ -112,290 +64,270 @@ class TranslationService:
         if target_lang not in self.SUPPORTED_LANGUAGES:
             raise ValueError(f"Unsupported target language: {target_lang}")
 
-        # If same language, return as-is
+        # Same language - return original
         if source_lang == target_lang:
             return text
 
         # Check cache
-        if use_cache:
-            cache_key = self._get_cache_key(text, source_lang, target_lang)
-            if cache_key in self.cache:
-                logger.debug(f"Cache hit for translation: {source_lang}→{target_lang}")
-                return self.cache[cache_key]
+        cache_key = self._get_cache_key(text, source_lang, target_lang)
+        if cache_key in self.cache:
+            logger.info(f"Cache hit for translation")
+            return self.cache[cache_key]
 
-        # Determine which model to use
-        if source_lang == 'en':
-            # English to Indian language
-            translated = await self._translate_en_to_indic(text, target_lang)
-        elif target_lang == 'en':
-            # Indian language to English
-            translated = await self._translate_indic_to_en(text, source_lang)
-        else:
-            # Indian language to Indian language (via English)
-            intermediate = await self._translate_indic_to_en(text, source_lang)
-            translated = await self._translate_en_to_indic(intermediate, target_lang)
+        # Try Bhashini API first
+        if self.bhashini_api_key:
+            try:
+                translated = await self._translate_with_bhashini(text, source_lang, target_lang)
+                if translated:
+                    self.cache[cache_key] = translated
+                    return translated
+            except Exception as e:
+                logger.error(f"Bhashini API error: {e}")
+                # Fall through to mock translation
 
-        # Cache the result
-        if use_cache:
-            cache_key = self._get_cache_key(text, source_lang, target_lang)
-            self.cache[cache_key] = translated
-
+        # Fallback: Mock translation for development
+        logger.warning(f"Using mock translation ({source_lang} → {target_lang})")
+        translated = self._mock_translate(text, source_lang, target_lang)
+        self.cache[cache_key] = translated
         return translated
 
-    async def _translate_en_to_indic(self, text: str, target_lang: str) -> str:
-        """Translate from English to Indian language"""
-        # Load model if needed
-        self._load_en_to_indic_model()
+    async def _translate_with_bhashini(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str
+    ) -> Optional[str]:
+        """
+        Translate using Bhashini API (Government of India)
 
-        # If model failed to load, use fallback
-        if self.en_to_indic_model is None:
-            return self._fallback_translate(text, 'en', target_lang)
-
-        try:
-            # Prepare input with language tokens
-            input_text = f"<{target_lang}> {text}"
-
-            # Tokenize
-            inputs = self.en_to_indic_tokenizer(
-                input_text,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=512
-            ).to(self.device)
-
-            # Generate translation
-            with torch.no_grad():
-                generated_tokens = self.en_to_indic_model.generate(
-                    **inputs,
-                    max_length=512,
-                    num_beams=5,
-                    early_stopping=True
-                )
-
-            # Decode
-            translated_text = self.en_to_indic_tokenizer.batch_decode(
-                generated_tokens,
-                skip_special_tokens=True
-            )[0]
-
-            logger.info(f"Translated EN→{target_lang}: {text[:50]}... → {translated_text[:50]}...")
-
-            return translated_text
-
-        except Exception as e:
-            logger.error(f"Translation failed: {e}")
-            return self._fallback_translate(text, 'en', target_lang)
-
-    async def _translate_indic_to_en(self, text: str, source_lang: str) -> str:
-        """Translate from Indian language to English"""
-        # Load model if needed
-        self._load_indic_to_en_model()
-
-        # If model failed to load, use fallback
-        if self.indic_to_en_model is None:
-            return self._fallback_translate(text, source_lang, 'en')
+        NOTE: This requires proper Bhashini API credentials.
+        Register at: https://bhashini.gov.in/ulca
+        """
+        logger.info(f"Translating with Bhashini API: {source_lang} → {target_lang}")
 
         try:
-            # Prepare input with language tokens
-            input_text = f"<{source_lang}> {text}"
+            # Bhashini API endpoint (update with actual endpoint structure)
+            url = f"{self.bhashini_endpoint}/translate"
 
-            # Tokenize
-            inputs = self.indic_to_en_tokenizer(
-                input_text,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=512
-            ).to(self.device)
+            headers = {
+                "Authorization": f"Bearer {self.bhashini_api_key}",
+                "User-ID": self.bhashini_user_id,
+                "Content-Type": "application/json"
+            }
 
-            # Generate translation
-            with torch.no_grad():
-                generated_tokens = self.indic_to_en_model.generate(
-                    **inputs,
-                    max_length=512,
-                    num_beams=5,
-                    early_stopping=True
-                )
+            payload = {
+                "text": text,
+                "source_language": source_lang,
+                "target_language": target_lang,
+                "model": "indictrans2"  # or appropriate model
+            }
 
-            # Decode
-            translated_text = self.indic_to_en_tokenizer.batch_decode(
-                generated_tokens,
-                skip_special_tokens=True
-            )[0]
+            response = requests.post(url, json=payload, headers=headers, timeout=10)
 
-            logger.info(f"Translated {source_lang}→EN: {text[:50]}... → {translated_text[:50]}...")
+            if response.status_code == 200:
+                result = response.json()
+                translated_text = result.get("translated_text") or result.get("translation")
 
-            return translated_text
+                if translated_text:
+                    logger.info(f"✅ Bhashini translation successful")
+                    return translated_text
+
+            logger.warning(f"Bhashini API returned status {response.status_code}")
+            return None
 
         except Exception as e:
-            logger.error(f"Translation failed: {e}")
-            return self._fallback_translate(text, source_lang, 'en')
+            logger.error(f"Error calling Bhashini API: {e}")
+            return None
+
+    def _mock_translate(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str
+    ) -> str:
+        """
+        Mock translation for development/testing
+
+        For production, replace this with actual Bhashini API calls or
+        alternative translation service (Google Translate, Azure, etc.)
+        """
+        source_name = self.SUPPORTED_LANGUAGES.get(source_lang, source_lang)
+        target_name = self.SUPPORTED_LANGUAGES.get(target_lang, target_lang)
+
+        # Return text with language marker for development
+        mock_translation = f"[{source_name}→{target_name}] {text}"
+
+        logger.info(f"Mock translation: {len(text)} chars")
+        return mock_translation
 
     async def translate_batch(
         self,
         texts: List[str],
-        source_lang: str = "en",
-        target_lang: str = "te"
+        source_lang: str,
+        target_lang: str
     ) -> List[str]:
         """
-        Translate multiple texts (more efficient than one-by-one)
+        Translate multiple texts in batch
 
         Args:
             texts: List of texts to translate
-            source_lang: Source language
-            target_lang: Target language
+            source_lang: Source language code
+            target_lang: Target language code
 
         Returns:
             List of translated texts
         """
-        if not texts:
-            return []
+        logger.info(f"Batch translating {len(texts)} texts")
 
-        # For now, translate one by one
-        # TODO: Implement true batch processing for better performance
         translated = []
         for text in texts:
-            result = await self.translate(text, source_lang, target_lang)
-            translated.append(result)
+            try:
+                result = await self.translate(text, source_lang, target_lang)
+                translated.append(result)
+            except Exception as e:
+                logger.error(f"Error translating text: {e}")
+                translated.append(text)  # Return original on error
 
         return translated
 
-    async def translate_dict(
-        self,
-        data: Dict,
-        source_lang: str = "en",
-        target_lang: str = "te",
-        translatable_keys: Optional[List[str]] = None
-    ) -> Dict:
+    def _get_cache_key(self, text: str, source_lang: str, target_lang: str) -> str:
+        """Generate cache key for translation"""
+        key_string = f"{text}:{source_lang}:{target_lang}"
+        return hashlib.md5(key_string.encode()).hexdigest()
+
+    async def detect_language(self, text: str) -> str:
         """
-        Translate specific fields in a dictionary
+        Detect language of text
 
-        Args:
-            data: Dictionary with fields to translate
-            source_lang: Source language
-            target_lang: Target language
-            translatable_keys: List of keys to translate (None = translate all string values)
-
-        Returns:
-            Dictionary with translated fields
+        For now, uses simple heuristics. Can be enhanced with:
+        - Bhashini language detection API
+        - langdetect library
+        - fasttext language identification
         """
-        if source_lang == target_lang:
-            return data
+        # Simple heuristic: check for common words
+        text_lower = text.lower()
 
-        translated = {}
+        # Telugu indicators
+        telugu_chars = any(char in text for char in ['ఆ', 'ఇ', 'ఈ', 'తా', 'ది'])
+        if telugu_chars:
+            return 'te'
 
-        for key, value in data.items():
-            # Determine if this key should be translated
-            should_translate = (
-                translatable_keys is None or key in translatable_keys
-            ) and isinstance(value, str)
+        # Hindi/Sanskrit indicators (Devanagari script)
+        devanagari_chars = any(char in text for char in ['आ', 'इ', 'ई', 'क', 'त', 'य'])
+        if devanagari_chars:
+            # Distinguish Hindi vs Sanskrit (basic heuristic)
+            if 'च' in text or 'ज' in text:
+                return 'hi'
+            return 'sa'
 
-            if should_translate:
-                translated[key] = await self.translate(value, source_lang, target_lang)
-            elif isinstance(value, list):
-                # Translate list items if they're strings
-                translated_list = []
-                for item in value:
-                    if isinstance(item, str) and (translatable_keys is None or key in translatable_keys):
-                        translated_list.append(
-                            await self.translate(item, source_lang, target_lang)
-                        )
-                    else:
-                        translated_list.append(item)
-                translated[key] = translated_list
-            elif isinstance(value, dict):
-                # Recursively translate nested dictionaries
-                translated[key] = await self.translate_dict(
-                    value, source_lang, target_lang, translatable_keys
-                )
-            else:
-                translated[key] = value
+        # Urdu indicators (Arabic/Persian script)
+        urdu_chars = any(char in text for char in ['ا', 'ب', 'ت', 'ث', 'ج'])
+        if urdu_chars:
+            return 'ur'
 
-        return translated
-
-    async def translate_paper_summary(
-        self,
-        summary: Dict,
-        target_lang: str = "te"
-    ) -> Dict:
-        """
-        Translate a paper summary object
-
-        Args:
-            summary: Dictionary with abstract, key_insights, etc.
-            target_lang: Target language
-
-        Returns:
-            Translated summary
-        """
-        # Define which fields to translate
-        translatable_fields = [
-            'abstract',
-            'introduction',
-            'methodology',
-            'results',
-            'discussion',
-            'conclusion',
-            'key_findings',
-            'contributions',
-            'limitations'
-        ]
-
-        return await self.translate_dict(
-            summary,
-            source_lang='en',
-            target_lang=target_lang,
-            translatable_keys=translatable_fields
-        )
-
-    def _fallback_translate(self, text: str, source_lang: str, target_lang: str) -> str:
-        """
-        Fallback translation when model is not available
-        (For development/testing purposes)
-        """
-        # Mock translations for testing
-        mock_translations = {
-            ('en', 'te'): {
-                'Welcome': 'స్వాగతం',
-                'Login': 'లాగిన్',
-                'Register': 'నమోదు',
-                'Upload Paper': 'పేపర్ అప్‌లోడ్ చేయండి',
-                'Analyze': 'విశ్లేషించండి',
-                'Smart Research Hub': 'స్మార్ట్ రీసెర్చ్ హబ్',
-            },
-            ('en', 'hi'): {
-                'Welcome': 'स्वागत है',
-                'Login': 'लॉग इन करें',
-                'Register': 'पंजीकरण करें',
-                'Upload Paper': 'पेपर अपलोड करें',
-                'Analyze': 'विश्लेषण करें',
-                'Smart Research Hub': 'स्मार्ट रिसर्च हब',
-            }
-        }
-
-        key = (source_lang, target_lang)
-        if key in mock_translations and text in mock_translations[key]:
-            logger.warning(f"Using mock translation: {text} → {mock_translations[key][text]}")
-            return mock_translations[key][text]
-
-        # If no mock translation, return original with marker
-        logger.warning(f"No translation available for: {text} ({source_lang}→{target_lang})")
-        return f"[{target_lang.upper()}] {text}"
-
-    def clear_cache(self):
-        """Clear translation cache"""
-        logger.info("Clearing translation cache")
-        self.cache.clear()
+        # Default to English
+        return 'en'
 
     def get_supported_languages(self) -> Dict[str, str]:
         """Get list of supported languages"""
         return self.SUPPORTED_LANGUAGES.copy()
 
-    def is_language_supported(self, lang_code: str) -> bool:
-        """Check if a language is supported"""
-        return lang_code in self.SUPPORTED_LANGUAGES
+    async def translate_document(
+        self,
+        document: Dict,
+        target_lang: str
+    ) -> Dict:
+        """
+        Translate structured document (title, abstract, sections)
 
+        Args:
+            document: Dictionary with 'title', 'abstract', 'sections', etc.
+            target_lang: Target language code
 
-# Initialize global translation service
-translation_service = TranslationService()
+        Returns:
+            Translated document dictionary
+        """
+        logger.info(f"Translating document to {target_lang}")
+
+        translated_doc = document.copy()
+
+        # Detect source language from title or abstract
+        source_text = document.get('title', '') or document.get('abstract', '')
+        source_lang = await self.detect_language(source_text)
+
+        # Translate title
+        if 'title' in document:
+            translated_doc['title'] = await self.translate(
+                document['title'],
+                source_lang,
+                target_lang
+            )
+
+        # Translate abstract
+        if 'abstract' in document:
+            translated_doc['abstract'] = await self.translate(
+                document['abstract'],
+                source_lang,
+                target_lang
+            )
+
+        # Translate keywords
+        if 'keywords' in document and isinstance(document['keywords'], list):
+            translated_doc['keywords'] = await self.translate_batch(
+                document['keywords'],
+                source_lang,
+                target_lang
+            )
+
+        # Translate sections
+        if 'sections' in document and isinstance(document['sections'], dict):
+            translated_sections = {}
+            for section_name, section_text in document['sections'].items():
+                translated_sections[section_name] = await self.translate(
+                    section_text,
+                    source_lang,
+                    target_lang
+                )
+            translated_doc['sections'] = translated_sections
+
+        translated_doc['original_language'] = source_lang
+        translated_doc['translated_to'] = target_lang
+
+        logger.info(f"✅ Document translated successfully")
+        return translated_doc
+
+    def clear_cache(self):
+        """Clear translation cache"""
+        self.cache.clear()
+        logger.info("Translation cache cleared")
+
+# ============================================================================
+# INTEGRATION NOTES FOR BHASHINI API
+# ============================================================================
+#
+# To integrate with actual Bhashini API:
+#
+# 1. Register at: https://bhashini.gov.in/ulca
+# 2. Get API credentials (API key + User ID)
+# 3. Add to .env:
+#    BHASHINI_API_KEY=your_key_here
+#    BHASHINI_USER_ID=your_user_id
+#    BHASHINI_API_ENDPOINT=https://api.bhashini.gov.in
+#
+# 4. Update _translate_with_bhashini() method with correct:
+#    - API endpoint structure
+#    - Request/response format
+#    - Authentication headers
+#
+# 5. Bhashini supports:
+#    - IndicTrans2 models (best for Indian languages)
+#    - Multiple language pairs
+#    - Batch translation
+#    - FREE for government/academic use
+#
+# 6. Alternative: Google Cloud Translation API
+#    - Supports all languages
+#    - $20 per 1M characters
+#    - Easy integration: from google.cloud import translate_v2
+#
+# ============================================================================

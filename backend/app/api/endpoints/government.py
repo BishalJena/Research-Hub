@@ -1,5 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 from app.api.dependencies.auth import get_current_user
 from app.models.user import User
@@ -56,6 +59,7 @@ async def analyze_government_alignment(
             detail=str(e)
         )
     except Exception as e:
+        logger.error(f"Government alignment error: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error analyzing government alignment: {str(e)}"

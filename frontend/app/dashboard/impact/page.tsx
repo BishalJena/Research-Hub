@@ -184,7 +184,7 @@ export default function ImpactPage() {
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                       {districts.map((district) => (
                         <label
-                          key={district.id}
+                          key={district.name}
                           className="flex items-center gap-2 cursor-pointer"
                         >
                           <input
@@ -350,8 +350,8 @@ export default function ImpactPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
-                    {result.district_impacts.map((impact, index) => (
-                      <div key={index} className="border rounded-lg p-4">
+                    {result.district_impacts.map((impact) => (
+                      <div key={impact.district} className="border rounded-lg p-4">
                         <h4 className="font-semibold mb-3">{impact.district}</h4>
 
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
