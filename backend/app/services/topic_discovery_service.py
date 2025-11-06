@@ -113,8 +113,8 @@ class TopicDiscoveryService:
                 "paper_count": topic.get("paper_count", 0),
                 "total_citations": topic.get("total_citations", 0)
             })
-            
-        return {"topics": formatted_topics}
+
+        return formatted_topics
 
     async def get_personalized_topics(
         self,

@@ -4,6 +4,7 @@ Provides mock API responses and test utilities
 """
 import pytest
 import asyncio
+import os
 from typing import Dict, List, Any
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
 import sys
@@ -13,13 +14,26 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+# Set test environment variables BEFORE importing app modules
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["REDIS_URL"] = "redis://localhost:6379/15"
+os.environ["CELERY_BROKER_URL"] = "redis://localhost:6379/15"
+os.environ["CELERY_RESULT_BACKEND"] = "redis://localhost:6379/15"
+os.environ["SECRET_KEY"] = "test-secret-key-12345"
+os.environ["JWT_SECRET_KEY"] = "test-jwt-secret-12345"
+os.environ["CROSSREF_EMAIL"] = "test@example.com"
+os.environ["OPENALEX_EMAIL"] = "test@example.com"
+os.environ["ENVIRONMENT"] = "testing"
+
 # Add app directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.core.config import Settings
-from app.core.database import Base, get_db
-from app.main import app
+from app.core.database import Base, get_db, engine as production_engine
 from app.models.user import User
+
+# Now import app after environment is configured
+from app.main import app
 
 
 # ============================================================================

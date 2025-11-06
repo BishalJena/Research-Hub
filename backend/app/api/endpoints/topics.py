@@ -37,7 +37,8 @@ async def get_trending_topics(
             limit=limit,
             time_window=time_window
         )
-        return topics
+        # Wrap in dict for frontend compatibility
+        return {"topics": topics}
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
